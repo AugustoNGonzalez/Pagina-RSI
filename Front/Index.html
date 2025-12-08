@@ -7,10 +7,7 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    
-    <!-- Header -->
     <header>
-
         <nav>
             <ul>
                 <li><a href="Index.html">Inicio</a></li>
@@ -18,40 +15,34 @@
                 <li><a href="">Registrarse</a></li>
             </ul>
         </nav>
-
     </header>
 
-    <!-- Tabla principal -->
     <main>
-
         <table id="mainTbl">
             <thead>
                 <tr>
                     <th>Accion</th>
                     <th>Precio</th>
                     <th>RSI</th>
-                    <th>Variacion</th>
-                    <th><button id="resetBtn">Reset</button></th>
+                    <th>
+                        <button id="updateBtn">Actualizar</button>
+                        <button id="resetBtn">Reset</button>
+                    </th>
                 </tr>
             </thead>
             <tbody id="mainTblBody">
             </tbody>
         </table>
-
-
     </main>
 
     <aside>
-    <!-- Botones de agregar -->
         <div>
+            <input type="text" id="symbolInput" placeholder="Símbolo (ej: AAPL)">
             <button id="addBtn">Agregar</button>
         </div>
-
         <div>
             <button id="addGroupBtn">Agregar en grupo</button>
         </div>
-
-    <!-- Acciones mas usadas que se agregan al clickear -->
         <div>
             <table id="mostUsed">
                 <thead>
@@ -65,10 +56,8 @@
         </div>
     </aside>
 
-    <footer>
-    </footer>
+    <footer></footer>
 
-    <script src="display.js"></script>
-
+    <script type="module" src="display.js"></script>
 </body>
 </html>
