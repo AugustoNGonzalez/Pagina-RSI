@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Comparador RSI</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script>
+    // Aplica el tema guardado ANTES de pintar: si esto corriera con el
+    // resto del JS, se vería un destello del tema anterior en cada carga.
+    if (localStorage.getItem("rsi:theme") === "light") {
+      document.documentElement.dataset.theme = "light";
+    }
+  </script>
+</head>
+<body>
+  <button id="aside-toggle" title="Ocultar panel">‹</button>
+
+  <aside id="controller">
+    <h1>Comparador RSI</h1>
+
+    <section class="panel">
+      <h2>Plazo</h2>
+      <div class="timeframe" id="timeframe">
+        <button data-tf="1h" disabled title="Próximamente">1H</button>
+        <button data-tf="1d" class="active">1D</button>
+        <button data-tf="1wk">1S</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="row">
+        <input id="add-symbol-input" type="text" placeholder="Ej: AAPL, MSFT"
+               autocomplete="off" spellcheck="false">
+        <button id="add-symbol-btn" class="primary">Agregar</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Tabla</h2>
+      <div class="row">
+        <button id="sync-btn" class="primary">Actualizar</button>
+      </div>
+      <div class="row mt">
+        <button id="add-all-btn">Agregar todas</button>
+        <button id="clear-btn">Limpiar vista</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Grupos</h2>
+      <div class="row">
+        <select id="group-select"></select>
+      </div>
+      <details>
+        <summary>Crear grupo nuevo</summary>
+        <input id="new-group-name" type="text" placeholder="Nombre del grupo">
+        <textarea id="new-group-symbols" rows="2"
+                  placeholder="Símbolos separados por coma: AAPL, MSFT, NVDA"></textarea>
+        <button id="create-group-btn" class="primary">Crear grupo</button>
+      </details>
+    </section>
+
+    <footer id="controller-footer">
+      <button id="settings-btn" class="icon-btn" title="Opciones">⚙</button>
+      <button id="theme-btn" class="icon-btn" title="Cambiar tema">☾</button>
+    </footer>
+  </aside>
+
+  <main>
+    <table class="stock-table">
+      <thead id="stock-table-head"></thead>
+      <tbody id="stock-table-body"></tbody>
+    </table>
+
+    <section>
+      <h2>Matriz de ratios (RSI de fila / columna)</h2>
+      <div id="matrix-container"></div>
+    </section>
+  </main>
+
+  <div id="progress">
+    <div class="spinner small"></div>
+    <span id="progress-text"></span>
+  </div>
+
+  <div id="overlay">
+    <div class="overlay-box">
+      <div class="spinner"></div>
+      <p id="overlay-text"></p>
+    </div>
+  </div>
+
+  <div id="toast-wrap"></div>
+
+  <div id="settings-modal" class="modal">
+    <div class="modal-box">
+      <header class="modal-header">
+        <h2>Opciones</h2>
+        <button id="settings-close" class="toast-close" title="Cerrar">✕</button>
+      </header>
+
+      <section class="modal-section">
+        <h3>Eliminar acción</h3>
+        <div class="row">
+          <select id="settings-stock-select"></select>
+          <button id="delete-stock-btn" class="danger">Eliminar</button>
+        </div>
+      </section>
+
+      <section class="modal-section">
+        <h3>Grupos</h3>
+        <div class="row">
+          <select id="settings-group-select"></select>
+          <button id="delete-group-btn" class="danger">Eliminar</button>
+        </div>
+        <p class="hint mt">Eliminar un grupo no borra sus acciones, sólo la agrupación.</p>
+
+        <div class="row mt">
+          <input id="rename-group-input" type="text" placeholder="Nuevo nombre">
+          <button id="rename-group-btn">Renombrar</button>
+        </div>
+
+        <h4 class="sub">Acciones del grupo</h4>
+        <ul id="group-members"></ul>
+        <div class="row mt">
+          <input id="group-add-symbols" type="text" placeholder="Agregar: AAPL, MSFT">
+          <button id="group-add-btn" class="primary">Sumar</button>
+        </div>
+      </section>
+
+      <section class="modal-section danger-zone">
+        <h3>Vaciar base de datos</h3>
+        <p class="hint">Borra TODAS las acciones y TODOS los grupos, con
+          su historial completo. No se puede deshacer.</p>
+        <button id="clear-db-btn" class="danger">Vaciar todo</button>
+      </section>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

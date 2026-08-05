@@ -1,0 +1,481 @@
+/* Frontend/css/styles.css
+   Temas claro y oscuro para datos financieros. Todo el color sale de las
+   variables del :root; el tema claro sólo las redefine, ninguna otra
+   regla cambia. Los gradientes del RSI y de la matriz NO están acá: se
+   calculan en JS (tableUI/matrixUI) porque son continuos. */
+
+/* ============================================================
+   1. Variables y base
+   ============================================================ */
+
+:root {
+  --bg: #10151c;
+  --panel: #171f2a;
+  --border: #263140;
+  --text: #dbe4ee;
+  --muted: #8494a8;
+  --accent: #3d8bfd;
+  --up: #2ecc71;
+  --down: #e5534b;
+  --btn-bg: #1d2836;
+  --row-hover: #1c2634;
+  --diag-bg: #0b0f14;
+  --cancel-hover: #35435a;
+}
+
+:root[data-theme="light"] {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --border: #d5dce5;
+  --text: #1b2530;
+  --muted: #64748b;
+  --accent: #2563eb;
+  --up: #15803d;
+  --down: #dc2626;
+  --btn-bg: #eef2f7;
+  --row-hover: #f0f4f9;
+  --diag-bg: #e2e8f0;
+  --cancel-hover: #cbd5e1;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  transition: grid-template-columns 0.2s ease;
+}
+
+h1 { font-size: 1.15rem; margin: 0 0 4px; }
+h2 {
+  font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); margin: 0 0 8px;
+}
+
+.empty { color: var(--muted); text-align: center; padding: 18px; }
+
+/* ============================================================
+   2. Controles (inputs y botones, en todo el sitio)
+   ============================================================ */
+
+input, select, textarea, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); }
+textarea { width: 100%; resize: vertical; margin-top: 6px; }
+
+button { cursor: pointer; background: var(--btn-bg); white-space: nowrap; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: wait; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { border-color: var(--down); color: var(--down); }
+button.danger:hover { background: var(--down); color: #fff; }
+
+.row { display: flex; gap: 6px; }
+.row > input, .row > select { flex: 1; min-width: 0; }
+.row.mt { margin-top: 8px; }
+
+/* ============================================================
+   3. Aside (panel de control) y su colapso
+   ============================================================ */
+
+/* Selector de plazo: tres botones pegados, uno activo */
+.timeframe { display: flex; }
+.timeframe button {
+  flex: 1;
+  border-radius: 0;
+  border-right-width: 0;
+  padding: 7px 0;
+  text-align: center;
+}
+.timeframe button:first-child { border-radius: 6px 0 0 6px; }
+.timeframe button:last-child { border-radius: 0 6px 6px 0; border-right-width: 1px; }
+.timeframe button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.timeframe button:disabled { cursor: not-allowed; }
+
+#controller {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: width 0.2s ease;
+}
+
+details summary { cursor: pointer; color: var(--muted); margin: 8px 0 4px; }
+details input { width: 100%; margin-top: 6px; }
+details button { width: 100%; margin-top: 8px; }
+
+#controller-footer {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+}
+.icon-btn {
+  background: none; border: none;
+  color: var(--muted);
+  font-size: 1.35rem; line-height: 1;
+  padding: 4px 8px;
+}
+.icon-btn:hover { color: var(--accent); }
+
+/* Colapso: se oculta con visibility + width 0, no con display:none.
+   Con display:none, main pasaría a ser el primer hijo del grid y
+   tomaría la columna angosta. */
+body.aside-hidden { grid-template-columns: 0 1fr; }
+body.aside-hidden #controller {
+  width: 0; min-width: 0;
+  padding-left: 0; padding-right: 0;
+  border-right: none;
+  visibility: hidden;
+}
+
+#aside-toggle {
+  position: fixed;
+  top: 10px; left: 300px;
+  z-index: 80;
+  width: 22px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-left: none;
+  border-radius: 0 6px 6px 0;
+  background: var(--panel); color: var(--muted);
+  font-size: 1rem; line-height: 1; padding: 0;
+  transition: left 0.2s ease;
+}
+#aside-toggle:hover { color: var(--accent); }
+body.aside-hidden #aside-toggle { left: 0; }
+
+/* ============================================================
+   4. Main
+   ============================================================ */
+
+main {
+  padding: 18px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* ============================================================
+   5. Tabla principal
+   ============================================================ */
+
+.stock-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.92rem;
+}
+.stock-table th, .stock-table td {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.stock-table thead th {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.stock-table th.sortable { cursor: pointer; user-select: none; }
+.stock-table th.sortable:hover { color: var(--text); }
+
+.stock-table tbody tr:hover { background: var(--row-hover); }
+.stock-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.sym { font-weight: 600; }
+.name { color: var(--muted); }
+.up   { color: var(--up); }
+.down { color: var(--down); }
+.rsi-cell { font-weight: 600; }   /* el color de fondo lo pone tableUI */
+
+.exch {
+  font-size: 0.72rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+/* Fila resaltada por RSI extremo: sobrecompra (≥70) roja, sobreventa
+   (≤30) verde. Tinte suave para no competir con la celda de RSI. */
+.stock-table tbody tr.zone-high { background: rgba(229, 83, 75, 0.10); }
+.stock-table tbody tr.zone-low  { background: rgba(46, 204, 113, 0.10); }
+.stock-table tbody tr.zone-high:hover { background: rgba(229, 83, 75, 0.18); }
+.stock-table tbody tr.zone-low:hover  { background: rgba(46, 204, 113, 0.18); }
+
+:root[data-theme="light"] .stock-table tbody tr.zone-high { background: rgba(201, 42, 30, 0.09); }
+:root[data-theme="light"] .stock-table tbody tr.zone-low  { background: rgba(13, 122, 58, 0.09); }
+:root[data-theme="light"] .stock-table tbody tr.zone-high:hover { background: rgba(201, 42, 30, 0.16); }
+:root[data-theme="light"] .stock-table tbody tr.zone-low:hover  { background: rgba(13, 122, 58, 0.16); }
+
+/* ---- Columna de acciones: la hora y los botones comparten lugar ----
+   La hora se ve por defecto; los botones aparecen al pasar el mouse por
+   la fila. El ancho fijo del contenedor evita que la columna salte. */
+
+.stock-table th.actions-col, .stock-table td.actions {
+  width: 1%; white-space: nowrap; text-align: right; padding-left: 6px;
+}
+.actions-wrap {
+  position: relative;
+  width: 48px; height: 22px;
+  margin-left: auto;
+}
+
+.upd {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: flex-end;
+  color: var(--muted); font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+.stock-table tbody tr:hover .upd { display: none; }
+
+.row-btn {
+  position: absolute; top: 0;
+  width: 22px; height: 22px;
+  display: none; align-items: center; justify-content: center;
+  border: none; background: none; padding: 0;
+  border-radius: 4px; font-size: 0.85rem; line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}
+.stock-table tbody tr:hover .row-btn { display: inline-flex; }
+
+/* Dos posiciones fijas: izquierda y derecha del contenedor */
+.row-btn.refresh, .row-btn.cancel { left: 0; }
+.row-btn.hide, .row-btn.confirm { right: 0; }
+
+.row-btn.refresh:hover { background: var(--accent); color: #fff; }
+.row-btn.hide:hover { background: var(--down); color: #fff; }
+
+/* Confirmación de quitar: visible aunque el mouse se vaya */
+tr.confirming .row-btn { display: inline-flex; }
+tr.confirming .upd { display: none; }
+.row-btn.confirm { color: var(--down); font-weight: 700; }
+.row-btn.confirm:hover { background: var(--down); color: #fff; }
+.row-btn.cancel:hover { background: var(--cancel-hover); color: var(--text); }
+
+/* Girando: visible sin hover y sin fondo (si no, giraría el cuadrado
+   de color del :hover). Va después del :hover para ganarle por orden. */
+.row-btn.spin, .row-btn.spin:hover {
+  display: inline-flex;
+  background: none;
+  color: var(--accent);
+  cursor: default;
+  animation: spin 0.8s linear infinite;
+}
+.stock-table tbody tr:has(.row-btn.spin) .upd { display: none; }
+
+/* ============================================================
+   6. Matriz de ratios
+   ============================================================ */
+
+#matrix-container { overflow-x: auto; }
+
+.rsi-matrix {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.rsi-matrix th, .rsi-matrix td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: center;
+  min-width: 74px;
+}
+.rsi-matrix th { background: var(--panel); font-weight: 600; }
+.rsi-matrix tbody th { position: sticky; left: 0; }  /* fija la 1a columna al scrollear */
+.rsi-matrix th.corner { font-size: 0.7rem; font-weight: 400; color: var(--muted); }
+
+.diag { background: var(--diag-bg); }
+.rsi-matrix td.no-data { color: var(--muted); }
+
+/* ============================================================
+   7. Avisos: overlay, progreso y toasts
+   ============================================================ */
+
+.spinner {
+  width: 38px; height: 38px;
+  margin: 0 auto;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.spinner.small { width: 15px; height: 15px; border-width: 2px; margin: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Overlay: bloquea la pantalla mientras dura una descarga */
+#overlay {
+  position: fixed; inset: 0;
+  display: none;
+  align-items: center; justify-content: center;
+  background: rgba(6, 10, 15, 0.72);
+  z-index: 90;
+}
+#overlay.show { display: flex; }
+
+.overlay-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px 40px;
+  text-align: center;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+#overlay-text { margin: 14px 0 0; white-space: pre-line; color: var(--text); }
+
+/* Progreso: píldora inferior, no bloquea */
+#progress {
+  position: fixed;
+  left: 50%; bottom: 22px;
+  transform: translateX(-50%);
+  display: none;
+  align-items: center; gap: 10px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+  z-index: 88;
+  pointer-events: none;
+  white-space: nowrap;
+}
+#progress.show { display: flex; }
+
+/* Toasts centrados */
+#toast-wrap {
+  position: fixed; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 10px;
+  pointer-events: none;   /* no bloquea la página… */
+  z-index: 100;
+}
+#toast-wrap.blocking {
+  pointer-events: auto;   /* …salvo con un error abierto (click afuera cierra) */
+  background: rgba(6, 10, 15, 0.45);
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 14px;
+  max-width: min(520px, 86vw);
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(10px) scale(0.97);
+  transition: opacity 0.25s, transform 0.25s;
+}
+.toast.show { opacity: 1; transform: none; }
+.toast.hide { opacity: 0; transform: translateY(-8px) scale(0.97); }
+
+.toast.ok    { border-color: var(--up); }
+.toast.error { border-color: var(--down); }
+.toast.info  { border-color: var(--accent); }
+
+.toast-msg { white-space: pre-line; }
+.toast-close {
+  border: none; background: none;
+  color: var(--muted);
+  padding: 2px 4px; font-size: 0.95rem;
+}
+.toast-close:hover { color: var(--text); }
+
+/* ============================================================
+   8. Modal de opciones
+   ============================================================ */
+
+.modal {
+  position: fixed; inset: 0;
+  display: none;
+  align-items: center; justify-content: center;
+  background: rgba(6, 10, 15, 0.6);
+  z-index: 95;
+}
+.modal.show { display: flex; }
+
+.modal-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: min(460px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
+}
+
+.modal-header {
+  position: sticky; top: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h2 { margin: 0; color: var(--text); }
+
+.modal-section {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-section:last-child { border-bottom: none; }
+.modal-section h3 { margin: 0 0 8px; font-size: 0.92rem; }
+.modal-section h4.sub {
+  margin: 16px 0 6px;
+  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); font-weight: 600;
+}
+
+.hint { color: var(--muted); font-size: 0.84rem; margin: 0 0 10px; }
+
+.danger-zone { background: rgba(229, 83, 75, 0.07); }
+.danger-zone h3 { color: var(--down); }
+
+/* Miembros del grupo seleccionado */
+#group-members {
+  list-style: none;
+  margin: 0; padding: 0;
+  max-height: 160px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+#group-members li {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+}
+#group-members li:last-child { border-bottom: none; }
+#group-members li.empty { justify-content: center; padding: 12px; }
+
+.member-del {
+  border: none; background: none;
+  color: var(--muted);
+  padding: 2px 6px; font-size: 0.85rem;
+  border-radius: 4px; cursor: pointer;
+}
+.member-del:hover { background: var(--down); color: #fff; }
