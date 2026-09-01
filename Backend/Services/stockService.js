@@ -8,6 +8,46 @@ import * as q from "../Database/queries.js";
 // truncamiento de SQL Server si Yahoo trae nombres muy largos).
 const clip = (v, max) => (v == null ? null : String(v).slice(0, max));
 
+/** Un símbolo suelto: recortado y en mayúsculas, que es como se guarda.
+ *  Sin export: afuera sólo hace falta la versión de lista. */
+const normalizeSymbol = s => String(s ?? "").trim().toUpperCase();
+
+/**
+ * Normaliza la lista de símbolos que llega en el body de un request:
+ * descarta lo que no sea texto o venga vacío, pasa a mayúsculas y
+ * deduplica. Tolerante a que `symbols` no sea un array.
+ *
+ * Vive acá, y no repetida en cada controller, porque este módulo es el
+ * dueño de la tabla Stocks: si dos implementaciones se desincronizaran,
+ * el símbolo con el que se consultan los indicadores dejaría de coincidir
+ * con el que se guardó al dar de alta, y la fila desaparecería de la
+ * matriz sin ningún error. Es el único helper duplicado del backend cuyo
+ * riesgo era silencioso; el resto (sleep, clip) siguen siendo copias
+ * locales a propósito: son de una línea y divergir no les hace daño.
+ */
+export function normalizeSymbols(symbols) {
+  return [...new Set(
+    (Array.isArray(symbols) ? symbols : [])
+      .filter(s => typeof s === "string" && s.trim())
+      .map(normalizeSymbol)
+  )];
+}
+
+/**
+ * StockId de un símbolo ya cargado, o null si no existe. Consulta barata
+ * que permite decidir cuánto histórico pedirle a Yahoo antes de hacer el
+ * fetch: histórico completo si es nueva, sólo el hueco si ya existe.
+ */
+export async function findStockBySymbol(symbol) {
+  const pool = await getConnection();
+
+  const res = await pool.request()
+    .input("Symbol", sql.NVarChar(20), normalizeSymbol(symbol))
+    .query(q.SELECT_STOCK_BY_SYMBOL);
+
+  return res.recordset[0]?.StockId ?? null;
+}
+
 /**
  * Busca una acción por símbolo; si no existe todavía, la crea con los
  * metadatos que vinieron de Yahoo Finance. Devuelve el StockId en
@@ -17,25 +57,12 @@ const clip = (v, max) => (v == null ? null : String(v).slice(0, max));
  * cambia de bolsa, el dato queda viejo hasta que se borre y recargue
  * la acción. Aceptable para este proyecto.
  */
-export async function findStockBySymbol(symbol) {
-  const pool = await getConnection();
-  const res = await pool.request()
-    .input("Symbol", sql.NVarChar(20), String(symbol).trim().toUpperCase())
-    .query(q.SELECT_STOCK_BY_SYMBOL);
-  return res.recordset[0]?.StockId ?? null;
-}
-
-/**
- * Busca una acción por símbolo; si no existe todavía, la crea con los
- * metadatos que vinieron de Yahoo Finance. Devuelve el StockId en
- * cualquiera de los dos casos (patrón get-or-create).
- */
 export async function getOrCreateStock(meta) {
   if (!meta?.symbol || typeof meta.symbol !== "string") {
     throw new Error("Symbol inválido");
   }
 
-  const symbol = meta.symbol.trim().toUpperCase();
+  const symbol = normalizeSymbol(meta.symbol);
   if (!symbol) throw new Error("Symbol inválido");
 
   const existing = await findStockBySymbol(symbol);
@@ -66,4 +93,3 @@ export async function getOrCreateStock(meta) {
     throw err;
   }
 }
-

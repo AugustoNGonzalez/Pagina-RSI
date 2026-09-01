@@ -2,6 +2,9 @@
 // Todas las queries parametrizadas (@Param) que usan los Services y
 // Controllers. Ninguna concatena strings directamente, por eso no hay
 // riesgo de SQL injection en ningún punto de la app.
+//
+// [Interval] va siempre entre corchetes: es palabra reservada de T-SQL
+// (DATEADD, DATEDIFF la usan como argumento).
 
 // ============================================================
 // Acciones (tabla Stocks)
@@ -27,7 +30,7 @@ SELECT CAST(SCOPE_IDENTITY() AS INT) AS StockId;
 // conocida. LEFT JOIN porque una acción recién agregada podría no tener
 // todavía fila en StockLastQuote. Alimenta la tabla del frontend.
 export const SELECT_ALL_STOCKS = `
-SELECT s.StockId, s.Symbol, s.LongName, s.Exchange,
+SELECT s.StockId, s.Symbol, s.LongName, s.ShortName, s.Exchange,
        l.LastPrice, l.LastEpoch, l.PreviousClose, l.UpdatedAt
 FROM Stocks s
 LEFT JOIN StockLastQuote l ON l.StockId = s.StockId
@@ -35,46 +38,41 @@ ORDER BY s.Symbol;
 `;
 
 // Borra una acción. Las FKs con ON DELETE CASCADE limpian automáticamente
-// sus precios, RSI, última cotización y membresías de grupo.
+// sus velas, última cotización y membresías de grupo.
 export const DELETE_STOCK = `
 DELETE FROM Stocks
 WHERE StockId = @StockId;
 `;
 
 // ============================================================
-// Precios y cotización
+// Velas y cotización
 // ============================================================
 
-// Epoch (timestamp Unix) de la vela COMPLETADA más reciente ya guardada
-// para una acción. Sirve para saber desde dónde persistir velas nuevas.
-// (La vela en curso del día nunca se guarda, vive solo en memoria.)
+// Epoch de la vela COMPLETADA más reciente guardada para una acción en
+// un intervalo. Marca desde dónde persistir velas nuevas, y cuánto
+// histórico hay que pedirle a Yahoo.
+// (La vela en curso nunca se guarda, vive sólo en memoria.)
 export const GET_LAST_EPOCH = `
 SELECT MAX(Epoch) AS LastEpoch
 FROM StockPrices
-WHERE StockId = @StockId;
+WHERE StockId = @StockId AND [Interval] = @Interval;
 `;
 
-// Todo el histórico de cierres de una acción, ordenado de más viejo a
-// más nuevo. Insumo del cálculo de RSI: se recalcula siempre la serie
-// completa (Wilder es recursivo, no admite cálculo por ventana parcial)
-// y se persisten solo los valores nuevos.
-export const SELECT_PRICES_FOR_RSI = `
-SELECT Epoch, ClosePrice
-FROM StockPrices
-WHERE StockId = @StockId
-ORDER BY Epoch ASC;
-`;
-
-// Cierres de un subconjunto de acciones, ordenados por acción y fecha.
-// Insumo de la matriz de ratios. El filtro va en SQL y no en JS porque
-// traer el catálogo entero para usar 3 símbolos transfiere decenas de
-// miles de filas al pedo. @Symbols llega como CSV ("AAPL,MSFT") y se
-// parte con STRING_SPLIT: es parametrizado, no concatenación.
-export const SELECT_CLOSES_FOR_SYMBOLS = `
-SELECT s.Symbol, p.Epoch, p.ClosePrice
+// Velas completas (OHLCV) de un subconjunto de acciones en un intervalo.
+// Insumo de TODOS los indicadores: se traen las cinco columnas porque
+// varios (Heikin Ashi, ATR, estocástico) no se calculan sólo con cierres.
+//
+// El filtro por símbolos va en SQL y no en JS porque traer el catálogo
+// entero para usar tres transfiere decenas de miles de filas al pedo.
+// @Symbols llega como CSV ("AAPL,MSFT") y se parte con STRING_SPLIT:
+// es parametrizado, no concatenación.
+export const SELECT_CANDLES_FOR_SYMBOLS = `
+SELECT s.Symbol, p.Epoch,
+       p.OpenPrice, p.HighPrice, p.LowPrice, p.ClosePrice, p.Volume
 FROM Stocks s
 JOIN StockPrices p ON p.StockId = s.StockId
-WHERE p.ClosePrice IS NOT NULL
+WHERE p.[Interval] = @Interval
+  AND p.ClosePrice IS NOT NULL
   AND s.Symbol IN (SELECT value FROM STRING_SPLIT(@Symbols, ','))
 ORDER BY s.Symbol, p.Epoch ASC;
 `;
@@ -96,36 +94,6 @@ BEGIN
     INSERT INTO StockLastQuote (StockId, LastPrice, PreviousClose, LastEpoch, UpdatedAt)
     VALUES (@StockId, @LastPrice, @PreviousClose, @LastEpoch, SYSUTCDATETIME());
 END
-`;
-
-// ============================================================
-// RSI
-// ============================================================
-
-// Epoch del último RSI ya calculado y guardado para una acción+período.
-// Marca desde dónde PERSISTIR (no desde dónde calcular: el cálculo
-// siempre corre sobre el histórico completo).
-export const GET_LAST_RSI_EPOCH = `
-SELECT MAX(Epoch) AS LastRSIEpoch
-FROM StockRSI
-WHERE StockId = @StockId AND RSIPeriod = @RSIPeriod;
-`;
-
-// Último RSI persistido de TODAS las acciones para un período dado
-// (subquery correlacionada: por cada acción, la fila con el Epoch más
-// alto). Alimenta la columna RSI de la tabla en la carga inicial; el
-// RSI vivo intradía viaja en la respuesta de cada sync, no sale de acá.
-export const SELECT_LAST_RSI_FOR_SYMBOLS = `
-SELECT s.Symbol, r.RSI
-FROM Stocks s
-JOIN StockRSI r ON r.StockId = s.StockId
-WHERE r.RSIPeriod = @RSIPeriod
-AND r.Epoch = (
-    SELECT MAX(r2.Epoch)
-    FROM StockRSI r2
-    WHERE r2.StockId = s.StockId
-      AND r2.RSIPeriod = @RSIPeriod
-);
 `;
 
 // ============================================================
@@ -204,8 +172,8 @@ WHERE GroupId = @GroupId AND StockId = @StockId;
 // Vaciado total (panel de opciones)
 // ============================================================
 
-// Las FKs en cascada limpian precios, RSI, cotizaciones y membresías;
-// hacen falta los dos DELETE porque borrar acciones no borra los grupos
+// Las FKs en cascada limpian velas, cotizaciones y membresías; hacen
+// falta los dos DELETE porque borrar acciones no borra los grupos
 // (quedarían vacíos) y viceversa.
 export const DELETE_ALL_GROUPS = `DELETE FROM StockGroups;`;
 export const DELETE_ALL_STOCKS = `DELETE FROM Stocks;`;

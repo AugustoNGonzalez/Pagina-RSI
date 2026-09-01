@@ -1,24 +1,27 @@
 // Frontend/js/UI/matrixUI.js
 // Render puro de la matriz comparativa de ratios.
-// Celda (fila, columna) = RSI de la serie fila/columna (el precio de una
-// dividido el de la otra, vela a vela). Es lo mismo que ver "AAPL/MSFT"
-// en TradingView con un RSI encima.
-// NO es espejada: RSI(B/A) no es el complemento de RSI(A/B).
-// El color usa el mismo gradiente que la tabla: rojo = el ratio está
-// sobrecomprado (la fila viene fuerte contra la columna), verde = lo
-// contrario.
+// Celda (fila, columna) = el indicador elegido aplicado a la serie
+// fila/columna (el precio de una dividido el de la otra, vela a vela).
+// Es lo mismo que ver "AAPL/MSFT" en TradingView con ese indicador
+// encima.
+// NO es espejada: el valor de B/A no es el complemento del de A/B.
+// El color usa el mismo gradiente que la tabla, según la escala que
+// declara el indicador.
 // Contenedor que espera en index.html: #matrix-container.
 
-import { esc, rsiStyle } from "./format.js";
+import { esc, fmtIndicator, indicatorStyle } from "./format.js";
 
 /**
- * @param {{rows: Array<{symbol, cells}>}} matrix
+ * @param {{rows: Array<{symbol, cells: Array<{symbol, value, points}>}>}} matrix
  *        Ya viene filtrada por el backend a los símbolos pedidos.
- * @param {string[]} visibleSymbols
- *        Red de seguridad: descarta filas que hayan quedado de un
- *        estado anterior si la matriz y la selección se desincronizan.
+ * @param {{
+ *   visibleSymbols: string[],   red de seguridad si la matriz y la
+ *                               selección quedaran desincronizadas
+ *   indicator: {id, label, scale, min?, max?, neutral?}
+ * }} opts
  */
-export function renderMatrix(matrix, visibleSymbols) {
+export function renderMatrix(matrix, opts = {}) {
+  const { visibleSymbols = [], indicator } = opts;
   const container = document.querySelector("#matrix-container");
 
   const show = new Set(visibleSymbols);
@@ -31,7 +34,6 @@ export function renderMatrix(matrix, visibleSymbols) {
   }
 
   const cols = rows.map(r => r.symbol);
-
   const headers = cols.map(sym => `<th>${esc(sym)}</th>`).join("");
 
   const body = rows.map(row => {
@@ -41,12 +43,16 @@ export function renderMatrix(matrix, visibleSymbols) {
       if (colSym === row.symbol) return `<td class="diag"></td>`;
 
       const cell = byCol.get(colSym);
-      if (!cell || typeof cell.rsi !== "number") {
+      if (!cell || cell.value == null) {
         return `<td class="no-data" title="Sin suficientes velas en común">—</td>`;
       }
 
-      const tip = `RSI de ${row.symbol}/${colSym} — ${cell.points} velas en común`;
-      return `<td style="${rsiStyle(cell.rsi)}" title="${esc(tip)}">${cell.rsi.toFixed(1)}</td>`;
+      const label = indicator?.label ?? "";
+      const tip = `${label} de ${row.symbol}/${colSym} — ${cell.points} velas en común`;
+
+      return `<td style="${indicatorStyle(cell.value, indicator)}" title="${esc(tip)}">${
+        fmtIndicator(cell.value, indicator)
+      }</td>`;
     }).join("");
 
     return `<tr><th>${esc(row.symbol)}</th>${cells}</tr>`;

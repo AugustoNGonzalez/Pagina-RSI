@@ -11,7 +11,7 @@ const API = "/api"; // rutas relativas: el backend sirve este frontend (mismo or
  * Helper central: arma el request, parsea el JSON y convierte los status
  * de error (4xx/5xx) en excepciones con el mensaje del backend.
  * Sin timeout a propósito: agregar una acción nueva puede tardar varios
- * segundos legítimos (descarga 5 años de Yahoo) y no hay que abortarlo.
+ * segundos legítimos (descarga años de histórico) y no hay que abortarlo.
  */
 async function request(method, path, body) {
   let res;
@@ -28,7 +28,8 @@ async function request(method, path, body) {
   }
 
   let json = null;
-  try { json = await res.json(); } catch { /* respuesta sin cuerpo JSON */ }
+  try { json = await res.json(); }
+  catch { console.warn(`[apiClient] respuesta no-JSON en ${method} ${path} (status ${res.status})`); }
 
   if (!res.ok) {
     throw new Error(json?.error ?? `Error del servidor (${res.status})`);
@@ -42,70 +43,106 @@ async function request(method, path, body) {
 /**
  * Todas las acciones cargadas, con su última cotización conocida.
  * Fuente: la base (puede estar desactualizada hasta el próximo sync).
- * @returns {Promise<Array<{stockId, symbol, longName, exchange, lastPrice,
- *                          previousClose, lastEpoch, updatedAt}>>}
+ * Los indicadores NO vienen acá: se piden por getIndicators().
+ * @returns {Promise<Array<{stockId, symbol, longName, shortName, exchange,
+ *                          lastPrice, previousClose, lastEpoch, updatedAt}>>}
  */
 export async function getStocks() {
   const rows = await request("GET", "/stocks");
   if (!Array.isArray(rows)) return [];
+
+  // Los DECIMAL y BIGINT de SQL Server pueden llegar como string según la
+  // versión del driver. Toda la app los trata como número: getLivePrices
+  // filtra por `typeof === "number"` y la variación diaria hace
+  // aritmética, así que si vinieran como texto los precios y el RSI vivo
+  // desaparecerían de la tabla en silencio, sin ningún error visible.
+  // priceService ya hacía esta conversión del lado del backend.
+  const num = v => (v == null ? null : Number(v));
+
   return rows.map(r => ({
     stockId: r.StockId,
     symbol: r.Symbol,
     longName: r.LongName,
+    shortName: r.ShortName,
     exchange: r.Exchange,
-    lastPrice: r.LastPrice,
-    previousClose: r.PreviousClose,
-    lastEpoch: r.LastEpoch,
+    lastPrice: num(r.LastPrice),
+    previousClose: num(r.PreviousClose),
+    lastEpoch: num(r.LastEpoch),
     updatedAt: r.UpdatedAt
   }));
 }
 
 /**
  * Agrega una acción, o la re-sincroniza si ya existía (es el mismo
- * endpoint: también lo usa el botón Actualizar). Tarda unos segundos
- * si es nueva, porque baja 5 años de histórico.
- * La respuesta trae `live` con precio y RSI DEL MOMENTO: usarlos para
- * pintar directo, sin re-fetch.
- * @returns {Promise<{stockId, symbol, mode, inserted, rsiPersisted,
- *                    live: {price, previousClose, rsi, epoch}}>}
+ * endpoint: también lo usa el botón Actualizar). Tarda unos segundos si
+ * es nueva, porque baja el histórico completo.
+ *
+ * @param {string} symbol
+ * @param {"1d"|"1h"} interval  qué granularidad sincronizar. El horario
+ *        se pide sólo cuando el usuario está en ese plazo: bajarlo
+ *        siempre duplicaría el tiempo de cada actualización.
+ * @returns {Promise<{stockId, symbol, interval, mode, inserted,
+ *                    live: {price, previousClose, epoch}}>}
  */
-export function addStock(symbol) {
-  return request("POST", "/stocks", { symbol });
+export function addStock(symbol, interval = "1d") {
+  return request("POST", "/stocks", { symbol, interval });
 }
 
-/** Borra una acción (y en cascada: sus precios, RSI y membresías de grupos). */
+/** Borra una acción (y en cascada: sus velas y membresías de grupos). */
 export function deleteStock(stockId) {
   return request("DELETE", `/stocks/${stockId}`);
-}
-
-/**
- * Último RSI persistido de cada acción (vela completada; el RSI vivo
- * intradía sólo viaja en las respuestas de addStock). Alimenta la
- * columna RSI de la tabla en la carga inicial.
- * @returns {Promise<Array<{symbol, rsi}>>}
- */
-export async function getRSIMatrix() {
-  const rows = await request("GET", "/rsi/matrix");
-  if (!Array.isArray(rows)) return [];
-  return rows.map(r => ({ symbol: r.Symbol, rsi: r.RSI }));
-}
-
-/**
- * Matriz N×N con el RSI de cada par A/B (RSI de la serie del ratio).
- * @param {Object<string, number>} live  precios del momento por símbolo,
- *        para que la matriz incluya la vela en curso como la tabla
- * @param {string[]} symbols  qué acciones calcular. Sin esto el backend
- *        haría los N² pares del catálogo entero.
- * @returns {Promise<{rows: Array<{symbol, cells}>}>}
- */
-export async function getRatioMatrix(live = {}, symbols = [], timeframe = "1d") {
-  const data = await request("POST", "/rsi/ratio-matrix", { live, symbols, timeframe });
-  return data && Array.isArray(data.rows) ? data : { rows: [] };
 }
 
 /** Vacía la base: borra TODAS las acciones y grupos. Irreversible. */
 export function clearAllData() {
   return request("DELETE", "/data");
+}
+
+// ============ Indicadores ============
+
+/**
+ * Catálogo de indicadores disponibles: qué existe, cómo se llama y en
+ * qué escala se mueve. El frontend arma columnas y colores con esto, sin
+ * conocer los indicadores de antemano.
+ * @returns {Promise<Array<{id, label, scale, min?, max?, neutral?}>>}
+ */
+export async function getIndicatorMeta() {
+  const rows = await request("GET", "/indicators/meta");
+  return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Valores de los indicadores pedidos para cada símbolo, en el plazo
+ * pedido. Se calculan al vuelo en el backend, no hay nada persistido.
+ *
+ * @param {string[]} symbols
+ * @param {"1h"|"1d"|"1wk"} timeframe
+ * @param {string[]} indicators  ids; vacío = todos
+ * @param {Object<string, number>} live  precios del momento, para cerrar
+ *        el período en curso (la base sólo tiene velas cerradas)
+ * @returns {Promise<Array<{symbol, values: Object<string, number|null>}>>}
+ */
+export async function getIndicators(symbols, timeframe, indicators, live = {}) {
+  const rows = await request("POST", "/indicators", { symbols, timeframe, indicators, live });
+  return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Matriz N×N con el indicador aplicado a cada par A/B.
+ *
+ * @param {string[]} symbols  obligatorio: con N símbolos son N² pares,
+ *        así que pedir el catálogo entero sería un segundo de cómputo
+ *        bloqueante en el backend
+ * @param {"1h"|"1d"|"1wk"} timeframe
+ * @param {string} indicator
+ * @param {Object<string, number>} live
+ * @returns {Promise<{rows: Array<{symbol, cells: Array<{symbol, value, points}>}>}>}
+ */
+export async function getRatioMatrix(symbols, timeframe, indicator, live = {}) {
+  const data = await request("POST", "/indicators/ratio-matrix", {
+    symbols, timeframe, indicator, live
+  });
+  return data && Array.isArray(data.rows) ? data : { rows: [] };
 }
 
 // ============ Grupos ============
@@ -166,16 +203,4 @@ export function addStocksToGroup(groupId, symbols) {
 /** Saca una acción de un grupo. La acción sigue cargada en el sistema. */
 export function removeStockFromGroup(groupId, stockId) {
   return request("DELETE", `/groups/${groupId}/stocks/${stockId}`);
-}
-
-/**
- * RSI de cada símbolo en el plazo pedido, calculado al vuelo.
- * @param {string[]} symbols
- * @param {"1h"|"1d"|"1wk"} timeframe
- * @param {Object<string, number>} live  precios del momento
- * @returns {Promise<Array<{symbol, rsi}>>}
- */
-export async function getRSIByTimeframe(symbols, timeframe, live = {}) {
-  const rows = await request("POST", "/rsi/by-timeframe", { symbols, timeframe, live });
-  return Array.isArray(rows) ? rows : [];
 }

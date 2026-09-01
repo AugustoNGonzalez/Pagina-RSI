@@ -1,72 +1,14 @@
 // Controllers/stocksController.js
-// Endpoints de acciones: listar, agregar/sincronizar, borrar, el RSI de
-// cada una (persistido o por plazo), la matriz de ratios y el vaciado
-// total de la base.
+// CRUD de acciones: listar, agregar/sincronizar, borrar, y el vaciado
+// total de la base. Los cálculos viven en indicatorsController.
 
 import { getConnection, sql } from "../Database/connection.js";
 import * as q from "../Database/queries.js";
 import { syncStock } from "../Services/syncService.js";
-import { RSI_PERIOD } from "../Services/serviceConfig.js";
-import { buildRatioMatrix } from "../Services/ratioService.js";
-import { applyTimeframe } from "../Services/timeframeService.js";
-import { calculateRSI } from "../Services/rsiService.js";
-
-// Distingue "el símbolo no existe" (culpa del input del usuario → 404)
-// de un error real del servidor/Yahoo (→ 500). Mismo criterio heurístico
-// que isNonRetryable en marketDataService.
-function isSymbolNotFound(err) {
-  const msg = (err?.message ?? "").toLowerCase();
-  const status = err?.response?.status ?? err?.status;
-  return status === 404 ||
-    msg.includes("not found") ||
-    msg.includes("delisted") ||
-    msg.includes("no data");
-}
-
-// Normaliza la lista de símbolos del body y el plazo pedido.
-function readSymbols(body) {
-  return (Array.isArray(body?.symbols) ? body.symbols : [])
-    .filter(s => typeof s === "string" && s.trim())
-    .map(s => s.trim().toUpperCase());
-}
-
-// Sólo "1wk" cambia el comportamiento; cualquier otro valor cae a diario.
-// ("1h" todavía no está implementado: necesita fetch propio.)
-const readTimeframe = body => (body?.timeframe === "1wk" ? "1wk" : "1d");
-
-/**
- * Lee los cierres guardados de un conjunto de símbolos y los devuelve
- * agrupados por símbolo. Si el body trae `live`, agrega el precio del
- * momento como última vela: sin eso los indicadores quedarían un día
- * atrasados (StockPrices sólo guarda velas cerradas).
- */
-async function loadClosesBySymbol(symbols, live) {
-  const pool = await getConnection();
-
-  const result = await pool.request()
-    .input("Symbols", sql.NVarChar(sql.MAX), symbols.join(","))
-    .query(q.SELECT_CLOSES_FOR_SYMBOLS);
-
-  const bySymbol = new Map();
-  for (const r of result.recordset ?? []) {
-    let arr = bySymbol.get(r.Symbol);
-    if (!arr) bySymbol.set(r.Symbol, arr = []);
-    arr.push({ epoch: Number(r.Epoch), close: Number(r.ClosePrice) });
-  }
-
-  if (live && typeof live === "object") {
-    // Un mismo epoch sintético para todos, así intersecta igual que los
-    // cierres reales. "Ahora" siempre es posterior a cualquier guardado.
-    const nowEpoch = Math.floor(Date.now() / 1000);
-    for (const [symbol, price] of Object.entries(live)) {
-      const arr = bySymbol.get(symbol);
-      const p = Number(price);
-      if (arr && Number.isFinite(p) && p > 0) arr.push({ epoch: nowEpoch, close: p });
-    }
-  }
-
-  return bySymbol;
-}
+// Distingue "el símbolo no existe" (culpa del input del usuario → 404) de
+// un error real del servidor/Yahoo (→ 500). Vive en marketDataService,
+// que es quien conoce la forma de los errores de Yahoo.
+import { isSymbolNotFound } from "../Services/marketDataService.js";
 
 // GET /api/stocks — todas las acciones cargadas, con su último precio
 export async function getAllStocks(req, res) {
@@ -82,20 +24,27 @@ export async function getAllStocks(req, res) {
   }
 }
 
-// POST /api/stocks { symbol } — da de alta una acción, o la actualiza si
-// ya existe (es el mismo flujo). La respuesta incluye `live` con precio
-// y RSI del momento, para que el frontend pinte sin re-fetch.
+/**
+ * POST /api/stocks { symbol, interval? } — da de alta una acción, o la
+ * actualiza si ya existe (es el mismo flujo). `interval` decide qué
+ * granularidad sincronizar: '1d' por defecto, '1h' cuando el frontend
+ * pasa al plazo horario y esa acción todavía no tiene velas de una hora.
+ *
+ * La respuesta trae `live` con la cotización del momento. Los
+ * indicadores NO vienen acá: se piden por /api/indicators.
+ */
 export async function addStock(req, res) {
-  const { symbol } = req.body ?? {};
+  const { symbol, interval } = req.body ?? {};
 
   if (!symbol || typeof symbol !== "string" || !symbol.trim()) {
     return res.status(400).json({ error: "Symbol requerido" });
   }
 
   const clean = symbol.trim().toUpperCase();
+  const iv = interval === "1h" ? "1h" : "1d";
 
   try {
-    res.json(await syncStock(clean));
+    res.json(await syncStock(clean, iv));
 
   } catch (err) {
     if (isSymbolNotFound(err)) {
@@ -108,9 +57,9 @@ export async function addStock(req, res) {
 }
 
 // DELETE /api/stocks/:id — borra una acción. Las FKs con ON DELETE
-// CASCADE limpian automáticamente (y de forma atómica) sus precios, RSI,
-// última cotización y membresías de grupo: es un solo statement, no
-// hace falta transacción ni limpieza manual.
+// CASCADE limpian automáticamente (y de forma atómica) sus velas, última
+// cotización y membresías de grupo: es un solo statement, no hace falta
+// transacción ni limpieza manual.
 export async function deleteStock(req, res) {
   const stockId = Number(req.params.id);
   if (!Number.isInteger(stockId) || stockId <= 0) {
@@ -133,93 +82,6 @@ export async function deleteStock(req, res) {
   } catch (err) {
     console.error("[deleteStock]", err);
     res.status(500).json({ error: "Error eliminando stock" });
-  }
-}
-
-// GET /api/rsi/matrix — último RSI DIARIO persistido de cada acción.
-// Alimenta la carga inicial de la tabla; después el frontend pide el RSI
-// del plazo activo por /rsi/by-timeframe.
-export async function getRSIMatrix(req, res) {
-  try {
-    const pool = await getConnection();
-
-    const result = await pool.request()
-      .input("RSIPeriod", sql.Int, RSI_PERIOD)
-      .query(q.SELECT_LAST_RSI_FOR_SYMBOLS);
-
-    res.json(result.recordset ?? []);
-
-  } catch (err) {
-    console.error("[getRSIMatrix]", err);
-    res.status(500).json({ error: "Error obteniendo matriz RSI" });
-  }
-}
-
-/**
- * POST /api/rsi/by-timeframe { symbols, timeframe, live } — RSI de cada
- * símbolo en el plazo pedido, calculado al vuelo desde las velas diarias
- * guardadas. El semanal no se persiste: se deriva agrupando por semana
- * (el cierre semanal es el último cierre diario de esa semana).
- * @returns [{ symbol, rsi }]
- */
-export async function getRSIByTimeframe(req, res) {
-  const symbols = readSymbols(req.body);
-  const timeframe = readTimeframe(req.body);
-
-  if (!symbols.length) return res.json([]);
-
-  try {
-    const bySymbol = await loadClosesBySymbol(symbols, req.body?.live);
-
-    const out = [...bySymbol].map(([symbol, daily]) => {
-      const series = applyTimeframe(daily, timeframe);
-      const withRSI = calculateRSI(series, RSI_PERIOD);
-      return { symbol, rsi: withRSI.at(-1)?.rsi ?? null };
-    });
-
-    res.json(out);
-
-  } catch (err) {
-    console.error("[getRSIByTimeframe]", err);
-    res.status(500).json({ error: "Error calculando el RSI" });
-  }
-}
-
-/**
- * POST /api/rsi/ratio-matrix — matriz N×N con el RSI de cada par A/B.
- * Se calcula al vuelo desde los cierres guardados: son N² series que
- * cambian con cada vela nueva, y recalcularlas cuesta milisegundos.
- *
- * Body:
- *   symbols: string[]  qué acciones incluir. Sin esto habría que armar
- *     los N² pares del catálogo entero (con 38 acciones son ~1400 pares
- *     y un segundo de cómputo BLOQUEANTE: no hay await en el medio).
- *   timeframe: "1d"|"1wk"  plazo de las velas del ratio.
- *   live: { SYMBOL: precio }  precios del momento que el frontend ya
- *     tiene de los syncs, para que la matriz refleje el instante actual.
- */
-export async function getRatioMatrix(req, res) {
-  const symbols = readSymbols(req.body);
-  const timeframe = readTimeframe(req.body);
-
-  if (symbols.length < 2) {
-    return res.json({ rows: [] });   // con menos de 2 no hay par posible
-  }
-
-  try {
-    const bySymbol = await loadClosesBySymbol(symbols, req.body?.live);
-
-    // ratioService intersecta por epoch, así que necesita Maps
-    const stocks = [...bySymbol].map(([symbol, arr]) => ({
-      symbol,
-      closes: new Map(arr.map(c => [c.epoch, c.close]))
-    }));
-
-    res.json(buildRatioMatrix(stocks, RSI_PERIOD, timeframe));
-
-  } catch (err) {
-    console.error("[getRatioMatrix]", err);
-    res.status(500).json({ error: "Error obteniendo la matriz de ratios" });
   }
 }
 

@@ -25,8 +25,10 @@ export function savedTheme() {
   return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
 }
 
-/** Alterna el tema. Devuelve el nuevo, para que quien llame repinte los
- *  gradientes (son estilos inline: no cambian solos con el tema). */
+/** Alterna el tema y devuelve el nuevo. Ojo: quien llame TIENE que
+ *  repintar después (los gradientes de las celdas son estilos inline y no
+ *  cambian solos al cambiar el tema). Hoy app.js lo hace llamando a
+ *  render() y descarta el valor devuelto. */
 export function toggleTheme() {
   const next = savedTheme() === "light" ? "dark" : "light";
   applyTheme(next);
@@ -37,7 +39,6 @@ export function toggleTheme() {
 
 export function applyAside(hidden) {
   document.body.classList.toggle("aside-hidden", hidden);
-  $("#aside-toggle").textContent = hidden ? "›" : "‹";
   $("#aside-toggle").title = hidden ? "Mostrar panel" : "Ocultar panel";
   localStorage.setItem(ASIDE_KEY, hidden ? "1" : "0");
 }

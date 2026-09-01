@@ -21,6 +21,7 @@
   --row-hover: #1c2634;
   --diag-bg: #0b0f14;
   --cancel-hover: #35435a;
+  --toggle-bg: #2a3648;
 }
 
 :root[data-theme="light"] {
@@ -36,6 +37,7 @@
   --row-hover: #f0f4f9;
   --diag-bg: #e2e8f0;
   --cancel-hover: #cbd5e1;
+  --toggle-bg: #dfe6ef;
 }
 
 * { box-sizing: border-box; }
@@ -43,12 +45,11 @@
 body {
   margin: 0;
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: auto 1fr;   /* la primera columna la define el aside */
   height: 100vh;
   background: var(--bg);
   color: var(--text);
   font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-  transition: grid-template-columns 0.2s ease;
 }
 
 h1 { font-size: 1.15rem; margin: 0 0 4px; }
@@ -108,6 +109,7 @@ button.danger:hover { background: var(--down); color: #fff; }
 .timeframe button:disabled { cursor: not-allowed; }
 
 #controller {
+  width: 300px;
   background: var(--panel);
   border-right: 1px solid var(--border);
   padding: 16px;
@@ -116,7 +118,13 @@ button.danger:hover { background: var(--down); color: #fff; }
   gap: 18px;
   overflow-y: auto;
   overflow-x: hidden;
-  transition: width 0.2s ease;
+  transition: width 0.35s ease, padding 0.35s ease;
+}
+
+
+#controller > * {
+  flex: none;
+  width: 268px;      /* 300 del aside menos los 16 de padding a cada lado */
 }
 
 details summary { cursor: pointer; color: var(--muted); margin: 8px 0 4px; }
@@ -141,28 +149,31 @@ details button { width: 100%; margin-top: 8px; }
 /* Colapso: se oculta con visibility + width 0, no con display:none.
    Con display:none, main pasaría a ser el primer hijo del grid y
    tomaría la columna angosta. */
-body.aside-hidden { grid-template-columns: 0 1fr; }
 body.aside-hidden #controller {
-  width: 0; min-width: 0;
-  padding-left: 0; padding-right: 0;
-  border-right: none;
-  visibility: hidden;
+  width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-right-width: 0;
 }
 
 #aside-toggle {
   position: fixed;
-  top: 10px; left: 300px;
+  top: 50%; left: 0;
+  transform: translate(300px, -50%);
   z-index: 80;
-  width: 22px; height: 30px;
+  width: 26px; height: 52px;
   display: flex; align-items: center; justify-content: center;
   border: 1px solid var(--border); border-left: none;
-  border-radius: 0 6px 6px 0;
-  background: var(--panel); color: var(--muted);
-  font-size: 1rem; line-height: 1; padding: 0;
-  transition: left 0.2s ease;
+  border-radius: 0 12px 12px 0;
+  background: var(--toggle-bg); color: var(--text);
+  padding: 0;
+  transition: transform 0.35s ease, background 0.15s;
 }
-#aside-toggle:hover { color: var(--accent); }
-body.aside-hidden #aside-toggle { left: 0; }
+#aside-toggle:hover { background: var(--accent); color: #fff; }
+#aside-toggle svg { transition: transform 0.35s ease; }
+
+body.aside-hidden #aside-toggle { transform: translate(0, -50%); }
+body.aside-hidden #aside-toggle svg { transform: rotate(180deg); }
 
 /* ============================================================
    4. Main
@@ -208,7 +219,7 @@ main {
 .name { color: var(--muted); }
 .up   { color: var(--up); }
 .down { color: var(--down); }
-.rsi-cell { font-weight: 600; }   /* el color de fondo lo pone tableUI */
+.ind-cell { font-weight: 600; }   /* el color de fondo lo pone tableUI */
 
 .exch {
   font-size: 0.72rem;
@@ -298,12 +309,13 @@ tr.confirming .upd { display: none; }
 .rsi-matrix {
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
 }
 .rsi-matrix th, .rsi-matrix td {
   border: 1px solid var(--border);
-  padding: 8px 12px;
+  padding: 4px 8px;
   text-align: center;
-  min-width: 74px;
+  min-width: 52px;
 }
 .rsi-matrix th { background: var(--panel); font-weight: 600; }
 .rsi-matrix tbody th { position: sticky; left: 0; }  /* fija la 1a columna al scrollear */

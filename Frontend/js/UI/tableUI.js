@@ -1,42 +1,59 @@
 // Frontend/js/UI/tableUI.js
-// Render puro de la tabla principal. No hace fetch ni conoce el
-// apiClient: recibe los datos ya armados (app.js orquesta y mantiene el
-// estado) y pinta.
+// Render puro de la tabla principal. No hace fetch ni conoce el estado:
+// recibe los datos ya armados y pinta.
+//
+// Las columnas de indicadores son dinámicas: se arman con la metadata
+// que el backend expone en /api/indicators/meta, así agregar un
+// indicador nuevo no requiere tocar este archivo.
+//
 // Estado propio (de presentación, no del dominio): criterio de orden y
 // qué fila tiene abierta la confirmación de quitar. Vive acá para que
 // sobreviva a los re-renders del auto-refresh.
 // Contenedores que espera en index.html: #stock-table-head y
 // #stock-table-body.
 
-import { esc, fmt, fmtUpdated, rsiStyle, zoneClass } from "./format.js";
+import { esc, fmt, fmtUpdated, fmtIndicator, indicatorStyle, zoneClass } from "./format.js";
 
 // ---- Ordenamiento ----
+
 const changePct = s =>
   (typeof s.lastPrice === "number" &&
    typeof s.previousClose === "number" && s.previousClose !== 0)
     ? ((s.lastPrice - s.previousClose) / s.previousClose) * 100
     : null;
 
-const SORT_ACCESSORS = {
+// Accesores de las columnas fijas. Las de indicadores se agregan al
+// vuelo con la clave "ind:<id>".
+const BASE_ACCESSORS = {
   symbol: s => s.symbol,
-  name:   s => s.longName ?? "",
+  name:   s => s.longName ?? s.shortName ?? "",
   price:  s => s.lastPrice,
-  change: changePct,
-  rsi:    s => s.rsi
+  change: changePct
 };
 
-let sortKey = null;      // null = orden default (tal como llegan de app.js)
+function accessor(key) {
+  if (key.startsWith("ind:")) {
+    const id = key.slice(4);
+    return s => s.values?.[id] ?? null;
+  }
+  return BASE_ACCESSORS[key];
+}
+
+let sortKey = null;      // null = orden default (tal como llegan)
 let sortAsc = true;
 let confirming = null;   // símbolo con la confirmación de quitar abierta
 
 function sortStocks(stocks) {
   if (sortKey === null) return stocks;
 
-  const get = SORT_ACCESSORS[sortKey];
+  const get = accessor(sortKey);
+  if (!get) return stocks;
+
   const dir = sortAsc ? 1 : -1;
 
   return [...stocks].sort((a, b) => {
     const va = get(a), vb = get(b);
+    // Sin dato → siempre al final, sin importar la dirección
     if (va == null && vb == null) return 0;
     if (va == null) return 1;
     if (vb == null) return -1;
@@ -75,26 +92,37 @@ function actionsCell(s, syncing) {
 }
 
 /**
- * Tabla principal: una fila por acción VISIBLE (app.js ya filtró por
- * selección), ordenada según la columna elegida.
- * @param {Array} stocks
- * @param {{syncing?: Set<string>,
- *          onHide: (stock) => void,
- *          onRefresh: (stock) => void}} opts
+ * Tabla principal: una fila por acción visible, ordenada según la
+ * columna elegida.
+ *
+ * @param {Array} stocks   acciones a mostrar, con su objeto `values`
+ * @param {{
+ *   columns: Array<{id, label, scale, min?, max?, neutral?}>,  indicadores activos
+ *   timeframe: string,
+ *   syncing?: Set<string>,
+ *   onHide: (stock) => void,
+ *   onRefresh: (stock) => void
+ * }} opts
  */
 export function renderStockTable(stocks, opts = {}) {
-  const { syncing, onHide, onRefresh, timeframe = "1d" } = opts;
+  const { columns = [], timeframe = "1d", syncing, onHide, onRefresh } = opts;
+
   const thead = document.querySelector("#stock-table-head");
   const tbody = document.querySelector("#stock-table-body");
-  const tfLabel = { "1h": "1H", "1d": "1D", "1wk": "1S" }[timeframe] ?? "";
 
+  const tfLabel = { "1h": "1H", "1d": "1D", "1wk": "1S" }[timeframe] ?? "";
   const arrow = k => (k === sortKey ? (sortAsc ? " ▲" : " ▼") : "");
+
+  const indHeaders = columns.map(c =>
+    `<th class="sortable num" data-key="ind:${esc(c.id)}">${esc(c.label)} ${tfLabel}${arrow(`ind:${c.id}`)}</th>`
+  ).join("");
+
   thead.innerHTML = `<tr>
     <th class="sortable" data-key="symbol">Símbolo${arrow("symbol")}</th>
     <th class="sortable" data-key="name">Nombre${arrow("name")}</th>
     <th class="sortable num" data-key="price">Precio${arrow("price")}</th>
     <th class="sortable num" data-key="change">Var. día${arrow("change")}</th>
-    <th class="sortable num" data-key="rsi">RSI ${tfLabel}${arrow("rsi")}</th>
+    ${indHeaders}
     <th class="actions-col">Actualizado</th>
   </tr>`;
 
@@ -109,11 +137,17 @@ export function renderStockTable(stocks, opts = {}) {
     });
   });
 
+  const colCount = 5 + columns.length;
+
   if (!stocks.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">
+    tbody.innerHTML = `<tr><td colspan="${colCount}" class="empty">
       Vista vacía. Escribí un símbolo para agregarlo, o usá «Agregar todas».</td></tr>`;
     return;
   }
+
+  // La fila se resalta según el PRIMER indicador activo: con varias
+  // columnas, resaltar por todas sería un semáforo ilegible.
+  const zoneCol = columns[0];
 
   tbody.innerHTML = sortStocks(stocks).map(s => {
     const pct = changePct(s);
@@ -124,14 +158,21 @@ export function renderStockTable(stocks, opts = {}) {
       changeHtml = `<td class="num ${cls}">${sign}${pct.toFixed(2)}%</td>`;
     }
 
-    return `<tr class="${zoneClass(s.rsi)}${confirming === s.symbol ? " confirming" : ""}">
+    const indCells = columns.map(c => {
+      const v = s.values?.[c.id] ?? null;
+      return `<td class="num ind-cell" style="${indicatorStyle(v, c)}">${fmtIndicator(v, c)}</td>`;
+    }).join("");
+
+    const zone = zoneCol ? zoneClass(s.values?.[zoneCol.id] ?? null, zoneCol) : "";
+
+    return `<tr class="${zone}${confirming === s.symbol ? " confirming" : ""}">
       <td class="sym">${esc(s.symbol)}</td>
-      <td class="name">${esc(s.longName ?? "")}${
+      <td class="name">${esc(s.longName ?? s.shortName ?? "")}${
         s.exchange ? ` <span class="exch">${esc(s.exchange)}</span>` : ""
       }</td>
       <td class="num">${fmt(s.lastPrice)}</td>
       ${changeHtml}
-      <td class="num rsi-cell" style="${rsiStyle(s.rsi)}">${fmt(s.rsi)}</td>
+      ${indCells}
       ${actionsCell(s, syncing)}
     </tr>`;
   }).join("");
@@ -155,7 +196,7 @@ export function renderStockTable(stocks, opts = {}) {
           break;
         case "confirm":
           confirming = null;
-          onHide?.(stock);                 // app.js saca de la vista y re-renderiza
+          onHide?.(stock);                 // quien llama saca de la vista y repinta
           break;
       }
     });

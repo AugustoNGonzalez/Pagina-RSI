@@ -1,8 +1,12 @@
 // Services/timeframeService.js
-// Reagrupa velas diarias en otros plazos. El cierre de una semana es el
-// último cierre diario de esa semana, así que el RSI semanal sale de los
-// datos que ya están guardados: no hace falta pedirle nada a Yahoo ni
-// persistir una serie aparte.
+// Reagrupa velas en plazos más largos. Sólo se guardan en la base los
+// intervalos que Yahoo entrega como velas reales ('1d' y '1h'); los
+// derivados se calculan acá al vuelo.
+//
+// Hoy el único derivado es el semanal, que sale del diario: el cierre de
+// una semana ES el último cierre de esa semana, y el máximo/mínimo son
+// los extremos del período. Persistirlo sería guardar dos veces el mismo
+// dato, con el riesgo de que se desincronice.
 
 const DAY = 86400;
 
@@ -18,31 +22,71 @@ function weekKey(epoch) {
 }
 
 /**
- * Agrupa una serie diaria en velas semanales. El cierre de cada semana
- * es el de su última rueda; el epoch, el del lunes de esa semana.
- * La semana en curso se incluye con lo que haya hasta ahora, igual que
- * hace TradingView con la vela semanal abierta.
- *
- * @param {{epoch:number, close:number}[]} candles  ordenadas de vieja a nueva
- * @returns {{epoch:number, close:number}[]} serie semanal
+ * Fusiona una vela en el acumulador de su período.
+ * Apertura: la de la primera vela. Cierre: la de la última.
+ * Máximo/mínimo: los extremos. Volumen: la suma.
+ * (No sólo el cierre: los indicadores de rango —Heikin Ashi, ATR,
+ * estocástico— necesitan el OHLC agregado, no un cierre suelto.)
  */
-export function toWeekly(candles) {
-  const byWeek = new Map();   // los Map conservan el orden de inserción
-
-  for (const c of candles) {
-    // Se pisa en cada iteración: al terminar la semana queda el último
-    // cierre, que es exactamente el cierre semanal.
-    byWeek.set(weekKey(c.epoch), c.close);
+function merge(acc, c) {
+  if (!acc) {
+    return {
+      epoch: c.epoch,          // se pisa abajo con la clave del período
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume ?? 0
+    };
   }
 
-  return [...byWeek].map(([epoch, close]) => ({ epoch, close }));
+  if (c.high != null) acc.high = acc.high == null ? c.high : Math.max(acc.high, c.high);
+  if (c.low != null)  acc.low  = acc.low  == null ? c.low  : Math.min(acc.low, c.low);
+  acc.close = c.close;                       // la última vela manda
+  acc.volume = (acc.volume ?? 0) + (c.volume ?? 0);
+
+  return acc;
 }
 
 /**
- * Aplica el plazo pedido a una serie diaria.
- * @param {{epoch:number, close:number}[]} candles
- * @param {"1d"|"1wk"} timeframe
+ * Agrupa una serie diaria en velas semanales completas (OHLCV).
+ * La semana en curso se incluye con lo que haya hasta ahora, igual que
+ * hace TradingView con la vela semanal abierta.
+ *
+ * @param {Array<{epoch, open, high, low, close, volume}>} candles
+ *        ordenadas de más vieja a más nueva
+ * @returns {Array<{epoch, open, high, low, close, volume}>} serie semanal
+ */
+function toWeekly(candles) {
+  const byWeek = new Map();   // los Map conservan el orden de inserción
+
+  for (const c of candles) {
+    const key = weekKey(c.epoch);
+    byWeek.set(key, merge(byWeek.get(key), c));
+  }
+
+  // El epoch de cada vela semanal es el del lunes de su semana
+  return [...byWeek].map(([epoch, candle]) => ({ ...candle, epoch }));
+}
+
+/**
+ * Aplica el plazo pedido a una serie de velas.
+ * '1d' y '1h' se devuelven tal cual: ya vienen de la base en esa
+ * granularidad. '1wk' se deriva agrupando las diarias.
+ *
+ * @param {Array} candles
+ * @param {"1d"|"1h"|"1wk"} timeframe
  */
 export function applyTimeframe(candles, timeframe) {
   return timeframe === "1wk" ? toWeekly(candles) : candles;
+}
+
+/**
+ * Qué intervalo hay que leer de la base para servir un plazo.
+ * El semanal se deriva del diario, así que ambos leen '1d'.
+ * @param {"1d"|"1h"|"1wk"} timeframe
+ * @returns {"1d"|"1h"}
+ */
+export function baseInterval(timeframe) {
+  return timeframe === "1h" ? "1h" : "1d";
 }

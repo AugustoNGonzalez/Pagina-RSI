@@ -62,7 +62,14 @@ export function calculateRSI(candles, period = 14) {
     }
 
     let rsi;
-    if (avgLoss === 0) rsi = 100;       // solo subas en la ventana efectiva
+    // Serie plana: ni ganancias ni pérdidas en la ventana efectiva. El
+    // RSI es 0/0, indefinido; se devuelve el neutro porque no hay sesgo
+    // direccional alguno. Sin este caso caía por avgLoss === 0 y daba
+    // 100 ("máximo sobrecomprado") para algo que no se movió: pasa con
+    // papeles congelados y, sobre todo, con ratios entre dos símbolos
+    // que se mueven idéntico (doble listado, ADR contra su local).
+    if (avgGain === 0 && avgLoss === 0) rsi = 50;
+    else if (avgLoss === 0) rsi = 100;  // solo subas en la ventana efectiva
     else if (avgGain === 0) rsi = 0;    // solo bajas
     else {
       const rs = avgGain / avgLoss;

@@ -7,18 +7,9 @@
 import { getConnection, sql } from "../Database/connection.js";
 import * as q from "../Database/queries.js";
 import { syncMany } from "../Services/syncService.js";
+import { normalizeSymbols } from "../Services/stockService.js";
 
 const clip = (v, max) => (v == null ? null : String(v).slice(0, max));
-
-// Normaliza la lista de símbolos que llega del frontend: descarta lo que
-// no sea texto, pasa a mayúsculas y deduplica tipeos repetidos.
-function normalizeSymbols(symbols) {
-  return [...new Set(
-    (Array.isArray(symbols) ? symbols : [])
-      .filter(s => typeof s === "string" && s.trim())
-      .map(s => s.trim().toUpperCase())
-  )];
-}
 
 /**
  * Sincroniza símbolos (alta incluida si son nuevos) y los asocia a un

@@ -1,7 +1,7 @@
 // Services/marketDataService.js
 // Capa que habla con Yahoo Finance (vía yahoo-finance2) y devuelve las
-// velas diarias ya en un formato simple, sin que nadie más en la app
-// tenga que conocer el shape de la librería.
+// velas ya en un formato simple, sin que nadie más en la app tenga que
+// conocer el shape de la librería.
 
 import YahooFinance from "yahoo-finance2";
 import { RATE_LIMIT_MS, MAX_RETRIES } from "./serviceConfig.js";
@@ -19,34 +19,47 @@ const asEpoch = v => {
   return Number(v);
 };
 
-// Errores determinísticos: reintentar no va a cambiar el resultado, se
-// propagan de inmediato (ej: símbolo inexistente, request malformada).
-// Los transitorios (rate limit 429, timeouts, cortes de red, 5xx) sí se
-// reintentan con backoff.
-function isNonRetryable(err) {
+/**
+ * El símbolo no existe, está deslistado o Yahoo no tiene datos para él:
+ * culpa del input, no del servidor. Lo exporta este módulo porque es
+ * quien conoce la forma de los errores de Yahoo; stocksController lo usa
+ * para decidir entre un 404 y un 500 (antes tenía su propia copia con
+ * otro nombre y el mismo cuerpo).
+ */
+export function isSymbolNotFound(err) {
   const msg = (err?.message ?? "").toLowerCase();
   const status = err?.response?.status ?? err?.status;
 
-  if (status === 404 || status === 400) return true;
-  if (msg.includes("not found")) return true;
-  if (msg.includes("delisted")) return true;
-  if (msg.includes("no data")) return true;
+  return status === 404 ||
+    msg.includes("not found") ||
+    msg.includes("delisted") ||
+    msg.includes("no data");
+}
 
-  return false;
+// Errores determinísticos: reintentar no va a cambiar el resultado, se
+// propagan de inmediato. Es lo anterior MÁS el 400 (request malformada):
+// tampoco tiene sentido reintentarla, pero no es un símbolo inexistente,
+// así que no debe convertirse en un 404 para el usuario.
+// Los transitorios (rate limit 429, timeouts, cortes de red, 5xx) sí se
+// reintentan con backoff.
+function isNonRetryable(err) {
+  const status = err?.response?.status ?? err?.status;
+  return isSymbolNotFound(err) || status === 400;
 }
 
 /**
- * Trae las velas diarias de una acción entre dos fechas, junto con la
- * cotización viva y los límites de la sesión actual (necesarios para
- * separar velas completadas de la vela en curso del día).
+ * Trae las velas de una acción en un intervalo, entre dos fechas, junto
+ * con la cotización viva y los límites de la sesión actual (necesarios
+ * para separar velas completadas de la vela en curso).
  *
  * Reintenta con backoff exponencial ante errores transitorios hasta
  * MAX_RETRIES veces; los errores determinísticos (símbolo inválido)
  * se propagan al primer intento.
  *
- * @param {string} symbol  Ticker, ej: "AAPL"
- * @param {Date} from      Desde cuándo
- * @param {Date} to        Hasta cuándo
+ * @param {string} symbol    Ticker, ej: "AAPL"
+ * @param {"1d"|"1h"} interval  Granularidad de las velas
+ * @param {Date} from        Desde cuándo
+ * @param {Date} to          Hasta cuándo
  * @returns {Promise<{
  *   meta: { symbol, exchange, currency, instrumentType, longName, shortName,
  *           regularMarketPrice, regularMarketTime, previousClose,
@@ -54,7 +67,7 @@ function isNonRetryable(err) {
  *   candles: Array<{ epoch, open, high, low, close, volume }>
  * }>}
  */
-export async function fetchDailyCandles(symbol, from, to) {
+export async function fetchCandles(symbol, interval, from, to) {
   const period1 = toUnix(from);
   const period2 = toUnix(to);
 
@@ -70,8 +83,8 @@ export async function fetchDailyCandles(symbol, from, to) {
       const res = await yf.chart(symbol, {
         period1,
         period2,
-        interval: "1d",
-        includePrePost: false,
+        interval,
+        includePrePost: false,   // sólo sesión regular, también en 1h
         return: "object"
       });
 
@@ -83,7 +96,7 @@ export async function fetchDailyCandles(symbol, from, to) {
       const candles = [];
 
       for (let i = 0; i < ts.length; i++) {
-        // Sin cierre para esa posición, la vela no sirve (día sin dato)
+        // Sin cierre para esa posición, la vela no sirve (hueco de datos)
         if (q.close?.[i] == null) continue;
 
         candles.push({
@@ -100,8 +113,12 @@ export async function fetchDailyCandles(symbol, from, to) {
         meta: {
           symbol: res.meta?.symbol ?? symbol,
           exchange: res.meta?.exchangeName ?? null,
-          currency: res.meta?.currency ?? null,           // reservado: hoy no se lee
-          instrumentType: res.meta?.instrumentType ?? null, // reservado: hoy no se lee
+          // Estos dos SÍ se usan: getOrCreateStock los graba en Stocks al
+          // dar de alta. Lo que no hace nadie es volver a leerlos —
+          // SELECT_ALL_STOCKS no los trae y la UI no los muestra— así que
+          // quedan guardados en la base a la espera de que algo los pida.
+          currency: res.meta?.currency ?? null,
+          instrumentType: res.meta?.instrumentType ?? null,
           longName: res.meta?.longName ?? null,
           shortName: res.meta?.shortName ?? null,
 
@@ -110,9 +127,10 @@ export async function fetchDailyCandles(symbol, from, to) {
           regularMarketTime: asEpoch(res.meta?.regularMarketTime),
           previousClose: res.meta?.previousClose ?? null,
 
-          // Inicio de la sesión de hoy: toda vela con epoch >= este valor
-          // es la vela EN CURSO (parcial, epoch inestable) y no debe
-          // persistirse en StockPrices. La separación la hace syncService.
+          // Inicio de la sesión de hoy. En velas diarias marca cuál es la
+          // vela EN CURSO (parcial, epoch inestable), que no debe
+          // persistirse. En horarias sirve de referencia pero el corte lo
+          // hace la hora en curso. La separación la hace syncService.
           regularSessionStart: asEpoch(res.meta?.currentTradingPeriod?.regular?.start)
         },
         candles
@@ -120,14 +138,14 @@ export async function fetchDailyCandles(symbol, from, to) {
 
     } catch (err) {
       if (isNonRetryable(err)) {
-        console.error(`[YahooFetchError] symbol=${symbol} error no reintentable`, err);
+        console.error(`[YahooFetchError] symbol=${symbol} interval=${interval} error no reintentable`, err);
         throw err;
       }
 
       attempt++;
 
       console.error(
-        `[YahooFetchError] symbol=${symbol} attempt=${attempt}/${MAX_RETRIES} ` +
+        `[YahooFetchError] symbol=${symbol} interval=${interval} attempt=${attempt}/${MAX_RETRIES} ` +
         `from=${from.toISOString()} to=${to.toISOString()}`,
         err
       );
